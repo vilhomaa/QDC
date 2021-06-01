@@ -13,6 +13,7 @@ Mobility data: https://www.google.com/covid19/mobility/
 FRANCE :
 CASES : https://www.data.gouv.fr/en/datasets/donnees-relatives-aux-resultats-des-tests-virologiques-covid-19/#_
 AFTER DOWNLOADING FRANCE'S DATA, RENAME IT TO 'france_raw.csv'
+
 Regions : https://www.data.gouv.fr/en/datasets/regions-departements-villes-et-villages-de-france-et-doutre-mer/
 RENAME THE REGION DATA TO 'fr_regions.csv'
 
