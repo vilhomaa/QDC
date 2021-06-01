@@ -100,22 +100,6 @@ def fetch_weather_data_for_station(df, region):
         df = df[df["name"] != station_name]
 
 
-# poista
-def get_station(df, region):
-
-    # finds the closest weather station to the centroid of all the weather stations
-    # in a given region
-    return df.loc[
-        [
-            df[df["region"] == region][["latitude", "longitude"]]
-            .sub(df[df["region"] == region][["latitude", "longitude"]].mean())
-            .pow(2)
-            .sum(1)
-            .idxmin()
-        ]
-    ]
-
-
 def get_all_weather_data(df):
 
     master_df = pd.DataFrame()
