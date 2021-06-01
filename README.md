@@ -3,15 +3,19 @@ Code for Lassi's, David's and Shiyuan's QDC
 
 ## What the code does
 
+Fetches weather data (weather.py
 Cleans the data used (clean.py)
-Fetches weather data
+Runs all the analyses used in our report and generates the graphs as well. 
+(Runtime on lassis laptop circa 3h, because it runs the analysis for forecasting 1 to 30 days.
+if you are interested in a shorter runtime, limit the amount of days by changing the list day_amounts to include fewer days)
 
 
 ## Howto initialize and run
 
 1.) Run weather.py to get the newest weather data from meteostat's API
+        - make sure you have the FR_region_old_new.csv in your working directory
 
-2.) Download data from the following sources:
+2.) Download data from the following sources and add them to your working directory:
 
 """
 Mobility data: https://www.google.com/covid19/mobility/
