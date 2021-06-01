@@ -1,236 +1,100 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import pandas as pd
+from datetime import datetime, timedelta
+import statsmodels.api as sm
+from pathlib import Path
+import time
+import miceforest as mf
+
+starttime = time.time()
+
+# Import data
+data = pd.read_csv("final_data.csv")
+
+# Day of week dummies
+data["time"] = pd.to_datetime(data["time"])
+
+data = pd.concat((data, pd.get_dummies(data["time"].dt.day_name())), axis=1)
+
+# date as ordinal, counts the days since jesus birth
+data["time_ord"] = data["time"].map(datetime.toordinal)
+# normalize it to fit our data better - to count the days since first observation
+data["time_ord"] = data["time_ord"] - min(data["time_ord"])
+
+# Country dummies
+data = pd.concat((data, pd.get_dummies(data["country_region_code"])), axis=1)
+
+# Folder for saving graphs and tables
+Path("graphs_tables").mkdir(parents=True, exist_ok=True)
+
+######### VARIABLE DECLARATIONS AND FEATURE ENGINEERING ########
+
+## Feature engineering
+
+# In the main model, we wanted to use the incidence rate to measure
+# both the individuals' own cautiousness related due to the amount of corona
+# present - > we will count the measure for the effect of the governments'
+# measures as:
+#   total_cases - neurohm_idx*total_cases
+# => (1- neurohm_idx)*total_cases
+
+data["gov_measures_effect"] = (1 + data["neurohm_idx"]) * data["cases_per_100k"]
+data["log_gov_measures_effect"] = np.log(data["gov_measures_effect"] + 0.0001)
+
+# Lockdown effects -> France and Germany have had nationwide lockdowns
+
+# France -> 3 lockdowns:
+# 1.) early april -> 11.may (no data from that peroiod)
+# 2.) 30 October 2020 that would last until at least 1 December 2020
+# 3.) 3.4 - 3.5
+
+# Germany:
+# 1.) 16.3: Merkel encourages to stay home. official recommendations
+#   announced 22.3, some states lock down. Easing started 20.4
+# https://www.frontiersin.org/articles/10.3389/fpubh.2020.568287/full
+# 2.) 16.12 - 10.1 https://www.bbc.com/news/world-europe-55292614
+# 3.) 25.4 - now - notbroms
+
+data["lockdown_2_FR"] = (
+    (
+        (data["time"] >= datetime(2020, 10, 30, 0, 0))
+        & (data["time"] <= datetime(2020, 12, 1, 0, 0))
+    )
+    & (data["country_region_code"] == "FR")
+).astype(int)
+data["lockdown_3_FR"] = (
+    (
+        (data["time"] >= datetime(2021, 4, 3, 0, 0))
+        & (data["time"] <= datetime(2021, 5, 3, 0, 0))
+    )
+    & (data["country_region_code"] == "FR")
+).astype(int)
+
+data["lockdown_1_DE"] = (
+    (
+        (data["time"] >= datetime(2020, 3, 16, 0, 0))
+        & (data["time"] <= datetime(2020, 4, 20, 0, 0))
+    )
+    & (data["country_region_code"] == "DE")
+).astype(int)
+data["lockdown_2_DE"] = (
+    (
+        (data["time"] >= datetime(2020, 12, 16, 0, 0))
+        & (data["time"] <= datetime(2021, 1, 10, 0, 0))
+    )
+    & (data["country_region_code"] == "DE")
+).astype(int)
+data["lockdown_3_DE"] = (
+    ((data["time"] >= datetime(2021, 4, 25, 0, 0)) & (data["time"] <= datetime.now()))
+    & (data["country_region_code"] == "DE")
+).astype(int)
 
 
-##########################
-## DATA CLEANING SCRIPT ##
-##########################
+# Dependent variables
 
-## The idea of the script is to prepare the data for the Analysis
-
-## Dependencies:
-# weather data generated with weather.py
-# data of the amount of cases (links below)
-# country related data with names of areas and their respective codes
-#   - country related files are made manually from various sources
-
-
-## DATA SOURCES:
-"""
-Mobility data: https://www.google.com/covid19/mobility/
-
-
-FRANCE :
-CASES : https://www.data.gouv.fr/en/datasets/donnees-relatives-aux-resultats-des-tests-virologiques-covid-19/#_
-AFTER DOWNLOADING FRANCE'S DATA, RENAME IT TO 'france_raw.csv'
-Regions : https://www.data.gouv.fr/en/datasets/regions-departements-villes-et-villages-de-france-et-doutre-mer/
-RENAME THE REGION DATA TO 'fr_regions.csv'
-
-GERMANY:
-Cases: https://npgeo-corona-npgeo-de.hub.arcgis.com/datasets/6d78eb3b86ad4466a8e264aa2e32a2e4_0/data?orderBy=BundeslandId
-
-SWEDEN:
-Cases: https://www.folkhalsomyndigheten.se/smittskydd-beredskap/utbrott/aktuella-utbrott/covid-19/statistik-och-analyser/bekraftade-fall-i-sverige/
-"""
-
-
-## STRUCTURE:
-#       1. IMPORT COUNTRY-SPECIFIC DATA
-#           A. Combine data with the names and populations of
-#               the country-specific regions
-#           B. Generate the average cases per 100k inhabitants
-#               during the last 7 days
-#           C. Other adjustements
-#               - Adding the Neurohm index
-#
-#       2. IMPORT WEATHER-RELATED DATA
-#           - Generated with weather.py
-#       3. ALL DATA SETS
-
-
-## DATA FOR GERMANY
-
-RKI = pd.read_csv("RKI_history.csv", index_col=False)
-
-# Takes all the regions, discards all subregions of the german lands
-DE = RKI.loc[RKI["AdmUnitId"] == RKI["BundeslandId"]]
-
-# join the names of the regions
-lander = pd.read_csv("lander.csv", sep=",")
-DE_merged = DE.merge(lander, right_on="id", left_on="BundeslandId")
-
-# date to date and sorting
-DE_merged["Datum"] = pd.to_datetime(DE_merged["Datum"], format="%Y/%m/%d %H:%M:%S+%f")
-DE_merged.sort_values(["BundeslandId", "Datum"], inplace=True)
-
-# generate inzidenztal
-DE_merged["cases_past_7_days"] = DE_merged.groupby("BundeslandId")[
-    "AnzFallVortag"
-].transform(lambda x: x.rolling(7, 1).sum())
-
-# generate cases/100k inhabitants
-DE_merged["cases_per_100k"] = DE_merged["cases_past_7_days"] / (
-    DE_merged["pop"].str.replace(" ", "").astype(int) / 100
-)
-
-# Converting population numbers to be in the same format as all the other countries'
-DE_merged["pop"] = pd.to_numeric(DE_merged["pop"].str.replace(" ", ""))
-DE_merged["pop"] = DE_merged["pop"] * 1000
-
-## SWEDEN DATA
-
-SE_raw = pd.read_excel(
-    "Folkhalsomyndigheten_Covid19.xlsx", sheet_name="Antal per dag region"
-)
-
-SE_raw = SE_raw.set_index("Statistikdatum").stack().reset_index()
-SE_raw.columns = ["Datum", "county", "cases"]
-
-SE_regional_pop = pd.read_csv("SE_region_population.csv")
-# drops extra columns generated for some reason
-SE_regional_pop = SE_regional_pop[["county", "pop", "code"]]
-
-# Merge (will drop values for the whole of sweden)
-SE_merged = SE_raw.merge(SE_regional_pop, on="county")
-SE_merged.sort_values(["county", "Datum"], inplace=True)
-
-# calculate 7 day incidence rate per 100k inhabitants
-SE_merged["cases_past_7_days"] = SE_merged.groupby("county")["cases"].transform(
-    lambda x: x.rolling(7, 1).sum()
-)
-
-# generate cases/100k inhabitants
-SE_merged["cases_per_100k"] = SE_merged["cases_past_7_days"] / (
-    SE_merged["pop"] / 100000
-)
-
-
-## FRANCE DATA
-# REMINDER: RENAME THE CSV FILE GOTTEN FROM THE LINK TO FRANCE'S DATA TO:
-# 'france_raw.csv'
-FR_raw = pd.read_csv("france_raw.csv", sep=";")
-
-# add region names
-FR_regions = pd.read_csv("fr_regions.csv")
-
-FR_regions["code_no"] = FR_regions["code_no"].replace("COM", "999")
-FR_regions["code_no"] = FR_regions["code_no"].astype(int)
-FR_merged = FR_raw.merge(
-    FR_regions[["code_no", "name", "code"]], left_on="reg", right_on="code_no"
-)
-
-FR_merged = FR_merged.drop(["code_no"], axis=1)
-FR_merged = FR_merged.rename(columns={"name": "sub_region_1"})
-
-# keep only observations including all age groups
-FR_merged = FR_merged[FR_merged["cl_age90"] == 0]
-
-# date to date and sorting
-FR_merged["jour"] = pd.to_datetime(FR_merged["jour"], format="%Y-%m-%d")
-FR_merged.sort_values(["reg", "jour"], inplace=True)
-
-# generate inzidenzzahl
-FR_merged["cases_past_7_days"] = FR_merged.groupby("reg")["P"].transform(
-    lambda x: x.rolling(7, 1).sum()
-)
-
-# generate cases/100k inhabitants
-FR_merged["cases_per_100k"] = FR_merged["cases_past_7_days"] / (
-    FR_merged["pop"] / 100000
-)
-
-
-## ADDING THE NEUROHM INDEX
-# these are the regression coefficients from neurohm.py
-"""
-DE             0.2711
-FR             0.5944
-SE             0.3419
-"""
-# We will divide these by two, to get a standardized value
-# The maximum value is two
-
-DE_merged["neurohm_idx"] = 0.2711 / 2
-FR_merged["neurohm_idx"] = 0.5944 / 2
-SE_merged["neurohm_idx"] = 0.3419 / 2
-
-
-## MERGING ALL COUNTRY DATA TO 1 DF
-cols_from_country_data = [
-    "time",
-    "cases",
-    "population",
-    "region",
-    "cases_past_7_days",
-    "cases_per_100k",
-    "neurohm_idx",
-]
-
-# Merging all the data with the amount of cases to one df
-# first - rename the columns to have same names
-FR_merged = FR_merged.rename(
-    columns={"jour": "time", "P": "cases", "pop": "population", "code": "region"}
-)
-DE_merged = DE_merged.rename(
-    columns={
-        "Datum": "time",
-        "AnzFallVortag": "cases",
-        "pop": "population",
-        "code": "region",
-    }
-)
-SE_merged = SE_merged.rename(
-    columns={"Datum": "time", "pop": "population", "code": "region"}
-)
-
-FR_merged = FR_merged[cols_from_country_data]
-DE_merged = DE_merged[cols_from_country_data]
-SE_merged = SE_merged[cols_from_country_data]
-
-DE_merged["country_region_code"] = "DE"
-FR_merged["country_region_code"] = "FR"
-SE_merged["country_region_code"] = "SE"
-
-country_data = pd.concat([FR_merged, DE_merged, SE_merged])
-
-
-## IMPORT WEATHER DATA
-DE_weather = pd.read_csv("DE_weather_data.csv")
-FR_weather = pd.read_csv("FR_weather_data.csv")
-SE_weather = pd.read_csv("SE_weather_data.csv")
-
-DE_weather["country_region_code"] = "DE"
-FR_weather["country_region_code"] = "FR"
-SE_weather["country_region_code"] = "SE"
-
-weather_data = pd.concat([DE_weather, FR_weather, SE_weather])
-
-# Only take interesting columns
-weather_columns_of_interest = [
-    "time",  # date
-    "tavg",  # avg temp of the day
-    "prcp",  # Precipitation
-    "wspd",  # windspeed
-    "region",  # region code
-    "country_region_code",
-]
-
-weather_data = weather_data[weather_columns_of_interest]
-
-
-# COMBINING THREE DATA SOURCES
-
-mobility = pd.read_csv("Global_Mobility_Report.csv", index_col=False)
-countries_to_keep = ["DE", "SE", "FR"]
-mobility = mobility[mobility["country_region_code"].isin(countries_to_keep)]
-
-# Making the region code for joining
-mobility["region"] = mobility["iso_3166_2_code"].str[3:]
-
-columns_to_keep_mobility = [
-    "country_region_code",
-    "sub_region_1",
-    "region",
-    "date",
+mobility_locations = [
     "retail_and_recreation_percent_change_from_baseline",
     "grocery_and_pharmacy_percent_change_from_baseline",
     "parks_percent_change_from_baseline",
@@ -238,30 +102,551 @@ columns_to_keep_mobility = [
     "workplaces_percent_change_from_baseline",
     "residential_percent_change_from_baseline",
 ]
-mobility = mobility[columns_to_keep_mobility]
 
-# converting datatypes to be similar so that they can be joined
 
-mobility["time"] = pd.to_datetime(mobility["date"])
-mobility.drop(columns=["date"], inplace=True)
+## Explanatory Variable declarations
+explanatory_variables = [
+    "time_ord",
+    "log_gov_measures_effect",
+    "tavg",
+    "prcp",
+    "wspd",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+    "SE",
+    "FR",
+]
+lockdowns = [
+    "lockdown_2_FR",
+    "lockdown_3_FR",
+    "lockdown_1_DE",
+    "lockdown_2_DE",
+    "lockdown_3_DE",
+]
 
-country_and_mobility = pd.merge(
-    mobility, country_data, on=["time", "region", "country_region_code"]
+
+# Data imputations
+max_obs = len(data)
+for column, count in zip(data.columns, data.count()):
+    missing_values = ((max_obs - count) / max_obs) * 100
+    print(
+        "Column: "
+        + column
+        + " has  "
+        + str(round(missing_values, 1))
+        + "% missing values"
+    )
+
+data_amp = mf.ampute_data(
+    data[explanatory_variables + ["DE"] + lockdowns + mobility_locations],
+    perc=0.25,
+    random_state=2021,
+)
+
+kds = mf.KernelDataSet(data_amp, save_all_iterations=True, random_state=2021)
+
+# Run the MICE algorithm for 3 iterations
+kds.mice(3)
+
+# IMPORTANT DISTINCTION:
+# The imputed dataset, called 'data_completed' will be used for the regression and predictive
+# analytics.
+# The non-inputed data vill be used for visualizations
+data_completed = kds.complete_data()
+
+
+######################## VISUALISATIONS ###########################
+
+## Visualizing mobility
+# Plots for all locations for all countries
+
+
+def moving_average(data, window_size):
+    moving_average = []
+    for i in range(len(data)):
+        if i + window_size < len(data):
+            moving_average.append(np.mean(data[i : i + window_size]))
+        else:
+            moving_average.append(np.mean(data[i : len(data)]))
+    return moving_average
+
+
+## Group the dataframe based on countries
+
+grouped_data_aggregations = {loc: np.mean for loc in mobility_locations}
+grouped_data_aggregations["cases"] = np.sum
+grouped_data_aggregations["population"] = np.sum
+grouped_data_aggregations["cases_per_100k"] = np.mean
+# add here if more variables needed for aggregation
+
+grouped_data = data.groupby(["country_region_code", "time"], as_index=False).agg(
+    grouped_data_aggregations
+)
+grouped_data["mobility_avg"] = grouped_data[mobility_locations].mean(axis=1)
+
+## Graph for the total mobility of in countries with bins
+
+
+def date_is_weekend(date):
+    if date.weekday() > 4:
+        return True
+    else:
+        return False
+
+
+def total_mobility_graph(grouped_df, country):
+
+    grouped_df = grouped_df[grouped_df["country_region_code"] == country]
+
+    weekday_mobility_dates = []
+    weekend_mobility_dates = []
+
+    weekday_mobility = []
+    weekend_mobility = []
+
+    for date, mobility in zip(grouped_df["time"], grouped_df["mobility_avg"]):
+        if date_is_weekend(date):
+            weekend_mobility_dates.append(date)
+            weekend_mobility.append(mobility)
+        else:
+            weekday_mobility_dates.append(date)
+            weekday_mobility.append(mobility)
+
+    weekday_mobility_average = moving_average(weekday_mobility, 7)
+    weekend_mobility_average = moving_average(weekend_mobility, 7)
+
+    plt.figure(figsize=(9, 5))
+    plt.bar(weekday_mobility_dates, weekday_mobility, color="cornflowerblue")
+    plt.plot(weekday_mobility_dates, weekday_mobility_average, color="green")
+
+    plt.bar(weekend_mobility_dates, weekend_mobility, color="salmon")
+    plt.plot(weekend_mobility_dates, weekend_mobility_average, color="black")
+
+    plt.legend(
+        [
+            "Moving average (7 days) weekday mobility",
+            "Moving Average (7 days) weekend mobility",
+            "Weekday mobility",
+            "Weekend mobility",
+        ],
+        prop={"size": 15},
+    )
+    plt.title("{} Total Mobility Data".format(country), size=25)
+    date_since = min(grouped_df["time"]).date().strftime("%d.%m.%Y")
+    plt.xlabel("Date", size=15)
+    plt.ylabel("Mobility % change from average", size=20)
+    plt.xticks(size=15)
+    plt.yticks(size=15)
+    plt.savefig("graphs_tables/{}_mobility_total.png".format(country))
+
+
+total_mobility_graph(grouped_data, "DE")
+total_mobility_graph(grouped_data, "FR")
+total_mobility_graph(grouped_data, "SE")
+
+
+## graphs of daily mobility comparing countries (with MA)
+
+countries = ["DE", "FR", "SE"]
+
+plt.figure(figsize=(9, 5))
+for country in countries:
+    plt.plot(
+        grouped_data[grouped_data["country_region_code"] == country]["time"],
+        moving_average(
+            grouped_data[grouped_data["country_region_code"] == country][
+                "mobility_avg"
+            ],
+            7,
+        ),
+    )
+plt.axhline(y=0, color="r", linestyle="--")
+plt.legend(countries, prop={"size": 10})
+plt.xlabel("date", size=15)
+plt.ylabel("Mobility as % from normal", size=15)
+plt.title("Comparison of daily average mobility", size=20)
+plt.xticks(size=10)
+plt.yticks(size=10)
+plt.savefig("graphs_tables/countries_comparison_avg_mobility.png")
+
+
+## Graph of comparison between locations
+
+
+def location_comparison_graph(grouped_data, country, locations):
+    plt.figure(figsize=(9, 5))
+    for location in locations:
+        plt.plot(
+            grouped_data[grouped_data["country_region_code"] == country]["time"],
+            moving_average(
+                grouped_data[grouped_data["country_region_code"] == country][location],
+                7,
+            ),
+        )
+    plt.axhline(y=0, color="r", linestyle="--")
+    locations_title = [
+        location.replace("_percent_change_from_baseline", "")
+        .replace("_", " ")
+        .capitalize()
+        for location in locations
+    ]
+    plt.legend(locations_title, prop={"size": 10})
+    plt.xlabel("Date", size=15)
+    plt.ylabel("Mobility as % from normal", size=15)
+    plt.title(
+        "Comparison of daily average mobility between locations in {}".format(country),
+        size=20,
+    )
+    plt.xticks(size=10)
+    plt.yticks(size=10)
+    plt.savefig("graphs_tables/{}_mobility_comparison_locations.png".format(country))
+
+
+location_comparison_graph(grouped_data, "DE", mobility_locations)
+location_comparison_graph(grouped_data, "FR", mobility_locations)
+location_comparison_graph(grouped_data, "SE", mobility_locations)
+
+
+# Plotting relationships
+plt.figure(figsize=(9, 5))
+plt.scatter(
+    x=data["cases_per_100k"],
+    y=data["retail_and_recreation_percent_change_from_baseline"],
+    s=0.5,
+)
+plt.ylabel("Mobility as % from normal", size=15)
+plt.xlabel("Cases during last 7 days per 100k inhabitants", size=15)
+plt.savefig("graphs_tables/mobility_x_cases.png")
+
+
+graph_data = data[["tavg", "parks_percent_change_from_baseline"]].dropna()
+x_vals = graph_data["tavg"]
+y_vals = graph_data["parks_percent_change_from_baseline"]
+plt.figure(figsize=(9, 5))
+plt.scatter(x=x_vals, y=y_vals, s=0.5)
+m, b = np.polyfit(x_vals, y_vals, 1)
+plt.plot(x_vals, m * x_vals + b, label="OLS best fitted line", color="orange")
+plt.ylabel("Mobility in parks as % from normal", size=15)
+plt.xlabel("Average temperature of the day", size=15)
+plt.legend(loc="best")
+plt.savefig("graphs_tables/park_mobility_x_tavg.png")
+
+
+## Descriptive statistics
+
+data.describe()
+with open("descriptive_statistics.txt", "w") as fn:
+    fn.write(
+        data[
+            mobility_locations + explanatory_variables[:5] + ["log_gov_measures_effect"]
+        ]
+        .describe()
+        .round(decimals=2)
+        .T.to_string()
+    )
+
+
+## regression
+
+
+def make_regression_summaries(data, locations, x_variables, savefilename="_reg.txt"):
+    for location in locations:
+
+        data = data.dropna(subset=[location])
+
+        Y = data[location]
+        X = data[x_variables]
+
+        result = sm.OLS(endog=Y, exog=X, missing="drop").fit()
+
+        with open("{}{}".format(location, savefilename), "w") as fh:
+            fh.write(result.summary(xname=x_variables, yname=location).as_text())
+
+
+make_regression_summaries(
+    data_completed,
+    mobility_locations,
+    explanatory_variables + lockdowns,
+    "_reg_log_w_lockdowns.txt",
 )
 
 
-weather_data["time"] = pd.to_datetime(weather_data["time"])
-final_df = pd.merge(
-    country_and_mobility, weather_data, on=["time", "region", "country_region_code"]
+# =====================================================
+# ============== PREDICTIVE ANALYTICS =================
+# =====================================================
+
+
+def ML_analytics_summarizer(
+    data, pred_y_value, explanatory_variables, lockdowns, days_to_predict
+):
+
+    from sklearn.metrics import mean_squared_error
+    from sklearn.tree import DecisionTreeRegressor
+
+    print("Starting analysis for target variable: " + pred_y_value)
+
+    pred_x_variables = explanatory_variables + lockdowns
+    data_for_pred = data[pred_x_variables + [pred_y_value]].dropna()
+
+    data_cutoff_day = max(data_for_pred["time_ord"]) - days_to_predict
+
+    X_train = data_for_pred[data_for_pred["time_ord"] <= data_cutoff_day][
+        pred_x_variables
+    ]
+    X_test = data_for_pred[data_for_pred["time_ord"] > data_cutoff_day][
+        pred_x_variables
+    ]
+    y_train = data_for_pred[data_for_pred["time_ord"] <= data_cutoff_day][pred_y_value]
+    y_test = data_for_pred[data_for_pred["time_ord"] > data_cutoff_day][pred_y_value]
+    ## Regression plot
+    print("Conduction regression")
+    ols_model = sm.OLS(endog=y_train, exog=X_train, missing="drop").fit()
+    y_pred = ols_model.predict(X_test)
+
+    if days_to_predict % 7 == 0:
+        Path("graphs_days_{}".format(days_to_predict)).mkdir(
+            parents=True, exist_ok=True
+        )
+        x1 = X_test["time_ord"]
+        plt.figure(figsize=(9, 5))
+        plt.plot(x1, y_test, ".", label="Data")
+        plt.plot(x1, y_pred, "r.", label="Predicted")
+        plt.xlabel("Days from 15.2.2020", size=15)
+        # ax.plot(x1,y_pred, 'r', label="OLS prediction")
+        plt.legend(loc="best")
+        plt.savefig(
+            "graphs_days_{days}/reg_pred_{y}.png".format(
+                y=pred_y_value, days=days_to_predict
+            )
+        )
+
+    assert y_pred.count() == y_test.count(), "NA:s left in the data"
+
+    ## Regression evaluation RMSE:
+    error_test_reg = np.sqrt(mean_squared_error(y_test, y_pred))
+    print("RSME for regression: " + str(error_test_reg))
+
+    ## decision tree
+
+    print("Starting decision trees")
+
+    def find_reg_tree_RMSE_for_depth(
+        data, iterations, seed, X_train, X_test, y_train, y_test
+    ):
+
+        iteration = []
+        RSME = []
+
+        for i in range(1, iterations):
+
+            regr = DecisionTreeRegressor(max_depth=i)
+            regr.fit(X_train, y_train)
+            y = regr.predict(X_test)
+            iteration.append(i)
+            RSME.append(np.sqrt(mean_squared_error(y_test, y)))
+
+        return {"iteration": iteration, "RSME": RSME}
+
+    dec_tree_dephts = find_reg_tree_RMSE_for_depth(
+        data_for_pred, 25, 2021, X_train, X_test, y_train, y_test
+    )
+
+    error_test_dec_tree = min(dec_tree_dephts["RSME"])
+    dec_tree_optimal_depth = dec_tree_dephts["iteration"][
+        dec_tree_dephts["RSME"].index(error_test_dec_tree)
+    ]
+    print("Decision tree RSME:" + str(error_test_dec_tree))
+
+    if days_to_predict % 7 == 0:
+        plt.figure(figsize=(9, 5))
+        plt.plot(dec_tree_dephts["iteration"], dec_tree_dephts["RSME"])
+        plt.legend(["RSME"], prop={"size": 15})
+        plt.title("RSME for different dephts of the regression tree", size=25)
+        plt.xlabel("Depth", size=15)
+        plt.ylabel("RSME", size=20)
+        plt.savefig(
+            "graphs_days_{days}/{a}_Reg_tree_dephts_RSME.png".format(
+                a=pred_y_value, days=days_to_predict
+            )
+        )
+
+    ## random forest
+    print("Starting RF")
+    # Random forest model (complete the following 2 lines)
+    from sklearn.ensemble import RandomForestRegressor
+
+    rf = RandomForestRegressor(n_estimators=100, min_samples_leaf=5, random_state=2021)
+
+    # Train the random forest model
+    rf.fit(X_train, y_train)
+
+    # Compute the prediction over the training and testing sets
+    y_pred_test = rf.predict(X_test)
+
+    # Compute the MSE for the training and testing sets
+    # (Complete the lines beginning with 'error_train =' and 'error_test ='.)
+
+    error_test_rf = np.sqrt(mean_squared_error(y_test, y_pred_test))
+
+    print("RMSE on testing set:", error_test_rf)
+
+    # Get the name and the importance measure of the variable
+    # with the highest importance measure
+
+    importances = rf.feature_importances_
+    std = np.std([tree.feature_importances_ for tree in rf.estimators_], axis=0)
+    indices = np.argsort(importances)[::-1]
+
+    name = data_for_pred.columns[indices[0]]
+    importance = importances[indices[0]]
+
+    print("Name of the variable with the highest importance measure:", name)
+    print("Corresponding importance measure:", importance)
+
+    ## gradient boosting
+
+    print("Starting GBM")
+
+    # Gradient boosting model
+    from sklearn.ensemble import GradientBoostingRegressor
+
+    gbm = GradientBoostingRegressor(
+        loss="ls",
+        criterion="friedman_mse",
+        learning_rate=0.1,
+        n_estimators=1000,
+        min_samples_leaf=5,
+        max_depth=12,
+        random_state=2021,
+        verbose=0,
+    )
+
+    # Train the gradient boosting model
+    gbm.fit(X_train, y_train)
+
+    # Compute the prediction over the training and testing sets
+    y_pred_test = gbm.predict(X_test)
+
+    # Compute the MSE for the training and testing sets
+    error_test_gbm = np.sqrt(mean_squared_error(y_test, y_pred_test))
+
+    print("RMSE on testing set:", error_test_gbm)
+
+    # Graph of GBM Feature importances
+    feature_importance = gbm.feature_importances_
+    std = np.std([tree[0].feature_importances_ for tree in gbm.estimators_], axis=0)
+    indices = np.argsort(feature_importance)
+
+    names = data_for_pred.columns[indices]
+    importances = feature_importance[indices]
+
+    if days_to_predict % 7 == 0:
+        pos = np.arange(indices.shape[0]) + 2
+        plt.figure(figsize=(11, 7))
+        plt.barh(pos, importances, align="center")
+        plt.yticks(pos, np.array(names))
+        plt.title("GBM Feature Importance when predicting: {}".format(pred_y_value))
+        plt.tight_layout()
+        plt.savefig(
+            "graphs_days_{days}/GBM_ft_importance_{y}".format(
+                y=pred_y_value, days=days_to_predict
+            )
+        )
+
+    dict_for_analysis_summary = {
+        "Target_variable": pred_y_value,
+        "Target variable std": data[pred_y_value].std(),
+        "Regression RSME": error_test_reg,
+        "Decision tree RSME": error_test_dec_tree,
+        "Decision tree optimal depth": dec_tree_optimal_depth,
+        "Random Forests RSME": error_test_rf,
+        "Random forests highest importance measure": name,
+        "GBM RSME": error_test_gbm,
+    }
+
+    return dict_for_analysis_summary
+
+
+def ML_summarizer_loop_and_save(
+    data, mobility_locations, explanatory_variables, lockdowns, days_to_predict
+):
+
+    analysis_summary = []
+    for ndays in days_to_predict:
+
+        for location in mobility_locations:
+            buffer_dict = ML_analytics_summarizer(
+                data, location, explanatory_variables, lockdowns, ndays
+            )
+            buffer_dict["days_predicted"] = ndays
+            analysis_summary.append(buffer_dict)
+
+    analysis_summary_df = pd.DataFrame.from_dict(analysis_summary)
+    analysis_summary_df["GBM error as % of target variable std"] = (
+        analysis_summary_df["GBM RSME"] / analysis_summary_df["Target variable std"]
+    )
+    return analysis_summary_df
+
+
+day_amounts = [i + 1 for i in range(30)]
+
+analysis_summary_df = ML_summarizer_loop_and_save(
+    data_completed, mobility_locations, explanatory_variables, lockdowns, day_amounts
 )
 
-# Checking that all the regions are included in the newly merged df
-assert (
-    len(list(set(final_df.region.unique()) - set(mobility.region.unique()))) == 0
-), print("regions lost from country_data")
-assert (
-    len(list(set(final_df.region.unique()) - set(weather_data.region.unique()))) == 0
-), print("regions lost from weather data")
+analysis_summary_df.to_csv(
+    "Analysis_summary_df_{mini}_to_{maxi}_days.csv".format(
+        mini=min(day_amounts), maxi=max(day_amounts)
+    )
+)
 
 
-final_df.to_csv("final_data.csv")
+def make_RMSE_comparison_graphs(analysis_summary_df, mobility_locations):
+
+    RSME_columns = [
+        "Regression RSME",
+        "Decision tree RSME",
+        "Random Forests RSME",
+        "GBM RSME",
+    ]
+    for location in mobility_locations:
+        print("Creating a RSME Comparison table for {}".format(location))
+        single_location_results = analysis_summary_df[
+            analysis_summary_df["Target_variable"] == location
+        ]
+
+        # create figure and axis objects with subplots()
+        fig, ax = plt.subplots(figsize=(11, 6))
+        # make a plot
+        for ML_tool in RSME_columns:
+            ax.plot(
+                single_location_results["days_predicted"],
+                single_location_results[ML_tool],
+            )  # set x-axis label
+        ax.set_xlabel("Days Forecasted", fontsize=12)
+        # set y-axis label
+        ax.set_ylabel("RSME", fontsize=12)
+        # twin object for two different y-axis on the sample plot
+        ax2 = ax.twinx()
+        # make a plot with different y-axis using second axis object
+        ax2.plot(
+            single_location_results["days_predicted"],
+            single_location_results["GBM error as % of target variable std"],
+            color="black",
+        )
+        ax2.set_ylabel("GBM error as % of target variable std", fontsize=12)
+        fig.legend(
+            RSME_columns + ["GBM RSME as % of target variable std"],
+            prop={"size": 10},
+            loc="upper center",
+        )
+        plt.savefig("graphs_tables/RSME_comparison_{}".format(location))
+
+
+make_RMSE_comparison_graphs(analysis_summary_df, mobility_locations)
+
+print("--- %s seconds ---" % (time.time() - starttime))
