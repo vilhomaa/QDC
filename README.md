@@ -1,10 +1,17 @@
 # QDC
 Code for Lassi's, David's and Shiyuan's QDC
 
+## What the code does
+
+Cleans the data used (clean.py)
+Fetches weather data
+
 
 ## Howto initialize and run
 
-1.) Download data from the following sources:
+1.) Run weather.py to get the newest weather data from meteostat's API
+
+2.) Download data from the following sources:
 
 """
 Mobility data: https://www.google.com/covid19/mobility/
@@ -23,8 +30,6 @@ Cases: https://npgeo-corona-npgeo-de.hub.arcgis.com/datasets/6d78eb3b86ad4466a8e
 SWEDEN:
 Cases: https://www.folkhalsomyndigheten.se/smittskydd-beredskap/utbrott/aktuella-utbrott/covid-19/statistik-och-analyser/bekraftade-fall-i-sverige/
 """
-
-2.) Run weather.py to get the newest weather data from meteostat's API
 
 3.) Run clean.py
 
