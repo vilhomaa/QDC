@@ -5,7 +5,9 @@ Code for Lassi's, David's and Shiyuan's QDC
 
 Fetches weather data (weather.py
 Cleans the data used (clean.py)
+
 Runs all the analyses used in our report and generates the graphs as well. 
+
 (Runtime on lassis laptop circa 3h, because it runs the analysis for forecasting 1 to 30 days.
 if you are interested in a shorter runtime, limit the amount of days by changing the list day_amounts to include fewer days)
 
