@@ -7,6 +7,10 @@ import statsmodels.api as sm
 from pathlib import Path
 import time
 import miceforest as mf
+from sklearn.metrics import mean_squared_error
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor ,GradientBoostingRegressor
+
 
 starttime = time.time()
 
@@ -384,8 +388,7 @@ def ML_analytics_summarizer(
     data, pred_y_value, explanatory_variables, lockdowns, days_to_predict
 ):
 
-    from sklearn.metrics import mean_squared_error
-    from sklearn.tree import DecisionTreeRegressor
+
 
     print("Starting analysis for target variable: " + pred_y_value)
 
@@ -477,7 +480,7 @@ def ML_analytics_summarizer(
     ## random forest
     print("Starting RF")
     # Random forest model (complete the following 2 lines)
-    from sklearn.ensemble import RandomForestRegressor
+
 
     rf = RandomForestRegressor(n_estimators=100, min_samples_leaf=5, random_state=2021)
 
@@ -512,7 +515,7 @@ def ML_analytics_summarizer(
     print("Starting GBM")
 
     # Gradient boosting model
-    from sklearn.ensemble import GradientBoostingRegressor
+    
 
     gbm = GradientBoostingRegressor(
         loss="ls",
