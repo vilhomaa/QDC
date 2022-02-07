@@ -1,4 +1,4 @@
-# QDC
+# QTEM Data Challenge
 Code for Lassi's, David's and Shiyuan's QDC
 
 ## What the code does
